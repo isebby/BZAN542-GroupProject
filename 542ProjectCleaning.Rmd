@@ -1,0 +1,61 @@
+---
+title: "Untitled"
+output: html_document
+date: "2023-11-27"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+data <- read_csv('usa_00014.csv')
+```
+
+```{r}
+data$SEX <- ifelse(data$SEX == 1, "Male", "Female") #getting sex into character variable
+data <- data[which(data$AGE >= 18),] #getting only people above the age of 18
+data$MARST <- ifelse(data$MARST == 1 | data$MARST == 2, "Married", 
+                     ifelse(data$MARST %in% c(3, 4, 5), "No Longer Married", "Single"))
+data$RACE <- ifelse(data$RACE == 1, "White",
+                    ifelse(data$RACE == 2, "Black",
+                           ifelse(data$RACE == 3, "Native American",
+                                  ifelse(data$RACE %in% c(4, 5, 6), "Asian", "Other"
+                                         )
+                                  )
+                           )
+                    )
+data$CITIZEN <- ifelse(data$CITIZEN == 0, "Citizen",
+                       ifelse(data$CITIZEN %in% c(1,2), "Citizen", "Non-Citizen"))
+data$EDUCD <- ifelse(data$EDUCD %in% c(0,1, 999), NA,
+                     ifelse(data$EDUCD %in% c(2:61), "No Highschool",
+                            ifelse(data$EDUCD %in% c(62:64), "High School",
+                                   ifelse(data$EDUCD %in% c(65:80, 90:100, 110:113), "Some College",
+                                          ifelse(data$EDUCD %in% c(81:83), "Associate's",
+                                                 ifelse(data$EDUCD == 101, "Bachelor's", "Graduate Degree"))))))
+data$EMPSTAT <- ifelse(data$EMPSTAT == 0, NA,
+                       ifelse(data$EMPSTAT == 1, "Employed",
+                              ifelse(data$EMPSTAT == 2, "Unemployed", "Not in Labor Force")))
+```
+
+```{r}
+data <- data[c(1,2,3,4,5,6,8,10,11,13,14)]
+```
+
+```{r}
+data$SEX <- as.factor(data$SEX)
+data$MARST <- as.factor(data$MARST)
+data$RACE <- as.factor(data$RACE)
+data$CITIZEN <- as.factor(data$CITIZEN)
+data$EDUCD <- as.factor(data$EDUCD)
+data$EMPSTAT <- as.factor(data$EMPSTAT)
+data$YEAR <- as.character(data$YEAR)
+```
+
+```{r}
+write.csv(data, 'project542data.csv', row.names = F)
+```
