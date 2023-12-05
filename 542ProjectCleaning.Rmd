@@ -13,7 +13,10 @@ library(tidyverse)
 ```
 
 ```{r}
-data <- read_csv('usa_00014.csv')
+data <- read_csv('usa_00016.csv')
+```
+```{r}
+data <- data[-14]
 ```
 
 ```{r}
@@ -43,7 +46,7 @@ data$EMPSTAT <- ifelse(data$EMPSTAT == 0, NA,
 ```
 
 ```{r}
-data <- data[c(1,2,3,4,5,6,8,10,11,13,14)]
+data <- data[c("FAMSIZE", "SEX", "AGE", "MARST", "RACE", "CITIZEN", "EDUCD", "EMPSTAT", "UHRSWORK", "INCWAGE")]
 ```
 
 ```{r}
@@ -53,7 +56,6 @@ data$RACE <- as.factor(data$RACE)
 data$CITIZEN <- as.factor(data$CITIZEN)
 data$EDUCD <- as.factor(data$EDUCD)
 data$EMPSTAT <- as.factor(data$EMPSTAT)
-data$YEAR <- as.character(data$YEAR)
 ```
 
 ```{r}

@@ -1,0 +1,95 @@
+---
+title: "542ProjectModels"
+output: html_document
+date: "2023-12-04"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=F}
+library(tidyverse)
+library(randomForest)
+library(xgboost)
+library(caret)
+library(caretEnsemble)
+library(party)
+library(glmnet)
+```
+
+```{r}
+project542data <- read_csv("project542data.csv", 
+    col_types = cols( 
+        SEX = col_factor(levels = c("Male", "Female")), 
+        MARST = col_factor(levels = c("No Longer Married", "Single", "Married")),
+        RACE = col_factor(levels = c("Asian", "Black", "Native American", "White", "Other")),
+        CITIZEN = col_factor(levels = c("Citizen", "Non-Citizen")),
+        EDUCD = col_factor(levels = c("Associate's", "Bachelor's", "Graduate Degree", "High School", "No Highschool", "Some College")),
+        EMPSTAT = col_factor(levels = c("Employed", "Not in Labor Force", "Unemployed"))
+        ))
+```
+
+```{r}
+project542data <- project542data %>%
+  filter(EMPSTAT == "Employed", INCWAGE <= 250000, UHRSWORK > 0, INCWAGE > 0, UHRSWORK < 99)
+project542data <- project542data[c(-8)]
+```
+
+
+```{r}
+# Split the data into training and testing sets
+set.seed(321)  # For reproducibility
+sample_indices <- createDataPartition(project542data$INCWAGE, p = 0.01, list = FALSE)
+project542data <- project542data[sample_indices, ]
+train_indices <- createDataPartition(project542data$INCWAGE, p = 0.7, list = FALSE)
+train_data <- project542data[train_indices, ]
+test_data <- project542data[-train_indices, ]
+```
+
+```{r, include = F}
+models <- caretList(
+  INCWAGE ~ .,
+  data = train_data,
+  trControl = trainControl(method = "cv", number = 5, verboseIter = T),
+  methodList = c("rf", "gbm", "xgbTree")
+)
+
+ensemble_model <- caretEnsemble(models)
+
+```
+
+```{r}
+summary(ensemble_model)
+```
+
+```{r}
+predictions <- predict(ensemble_model, newdata = test_data)
+
+# Evaluate the ensemble model
+rmse <- sqrt(mean((predictions - test_data$INCWAGE)^2))
+```
+
+```{r}
+summary(lm(data = project542data, INCWAGE ~ .))
+```
+
+```{r}
+y <- project542data$INCTOT
+x <- data.matrix(project542data[c(1:8,10)])
+cv_model <- cv.glmnet(x, y, alpha = 1)
+```
+
+```{r}
+best_lambda <- cv_model$lambda.min
+best_lambda
+```
+```{r}
+plot(cv_model) 
+```
+
+```{r}
+best_model <- glmnet(x, y, alpha = 1, lambda = best_lambda)
+coef(best_model)
+```
+
