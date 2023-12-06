@@ -1,0 +1,76 @@
+---
+title: "BZAN452 Project - Models"
+author: "Hannah Johnson"
+date: "2023-12-04"
+output: html_document
+---
+
+```{r packages}
+#install.packages("randomForest")
+library(readr)
+library(randomForest)
+library(caret)
+library(ranger)
+```
+
+```{r data}
+project542data <- read_csv("project542data.csv")
+```
+
+```{r subset}
+set.seed(542) #Comment out as needed
+sample_size <- 0.01
+subset_data <- project542data[sample(seq_len(nrow(project542data)), size=floor(sample_size*nrow(project542data))),]
+```
+
+```{r select training and testing data}
+set.seed(6499) #Comment out as needed
+sample_size <- 0.70
+training_row_numbers <- sample(seq_len(nrow(subset_data)), size = floor(sample_size * nrow(subset_data)))
+
+training_data <- subset_data[training_row_numbers,]
+testing_data <- subset_data[-training_row_numbers,]
+```
+
+```{r Random Forest attempt 1}
+set.seed(6499) #Comment out as needed
+rf_model <- randomForest(INCWAGE ~ .,
+                         data = training_data,
+                         ntree = 50,
+                         importance = TRUE)
+
+predictions <- predict(rf_model,
+                       newdata = testing_data)
+
+print(rf_model)
+print(rf_model$importance)
+varImpPlot(rf_model)
+```
+
+```{r Random Forest attempt 2}
+## WARNING: MAY TIME OUT YOUR COMPUTER
+
+#Set up cross-validation
+ctrl <- trainControl(method = "cv",
+                     number = 5)  #5-fold cross-validation
+
+#Train the model with cross-validation
+set.seed(6499) #Comment out as needed
+cv_model <- train(INCWAGE ~ .,
+                  data = training_data,
+                  method = "rf",
+                  trControl = ctrl)
+
+#View summary of cross-validated model
+print(cv_model)
+```
+
+```{r Random Forest attempt 3}
+## Classification forest with default settings
+#ranger(INCWAGE ~ ., data = subset_data)
+## Prediction
+model <- ranger(INCWAGE ~ ., data = training_data)
+predictions <- predict(model, data = testing_data)
+table(model$INCWAGE, predictions$INCWAGES)
+model$variable.importance
+```
