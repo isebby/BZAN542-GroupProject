@@ -1,0 +1,375 @@
+---
+title: "542ProjectModels"
+output: html_document
+date: "2023-12-04"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include=F}
+library(tidyverse)
+library(randomForest)
+library(xgboost)
+library(caret)
+library(caretEnsemble)
+library(party)
+library(glmnet)
+library(gbm)
+library(DALEX)
+library(parallel)
+library(doParallel)
+library(e1071)
+```
+
+```{r}
+load("project542data.Rdata")
+project542data <- data
+```
+
+```{r}
+project542data <- project542data %>%
+                    filter(EMPSTAT == "Employed")
+```
+
+```{r}
+hist(project542data$INCWAGE)
+hist(log10(project542data$INCWAGE))
+```
+
+```{r}
+quantile(project542data$INCWAGE)
+income_median <- median(project542data$INCWAGE)
+
+project542data$IncomeMedian <- as.factor(ifelse(project542data$INCWAGE <= income_median, "Below Median", "Above Median"))
+
+table(project542data$IncomeMedian)
+
+#percentage of individuals above the median income
+length(which(project542data$IncomeMedian == 'Above Median')) / length(project542data$IncomeMedian)
+mean(project542data$IncomeMedian == 'Above Median')
+```
+
+```{r}
+ggplot(data = project542data, aes(x = IncomeMedian)) +
+  geom_bar(fill = "darkgray") +
+  geom_text(stat = "count", aes(label = scales::comma(..count..)),
+            vjust = -0.5, color = "black", size = 4) +
+  labs(title = "Individuals Above and Below Median Income") +
+  scale_y_continuous(labels = scales::comma) +
+  theme_minimal() +
+  theme(axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(size = 10)) +
+  labs(x = NULL, y = NULL) 
+```
+
+```{r}
+infodensity <- nearZeroVar(project542data, saveMetrics= TRUE)
+infodensity[infodensity$nzv,][1:4,]
+
+zero.variance <- which( nearZeroVar(project542data, saveMetrics= TRUE)$zeroVar == TRUE )
+near.zero.variance <- which( nearZeroVar(project542data, saveMetrics= TRUE)$nzv == TRUE )
+
+project542data.NOnzv <- project542data[,-c(zero.variance,near.zero.variance) ]
+project542data.NOnzv <- project542data[,-nearZeroVar(project542data)]
+
+project542data <- project542data.NOnzv
+```
+
+```{r}
+set.seed(321)
+
+sample_indices <- createDataPartition(project542data$INCWAGE, p = 0.1, list = FALSE)
+project542data <- project542data[sample_indices, ]
+
+train_indices <- createDataPartition(project542data$INCWAGE, p = 0.7, list = FALSE)
+train_data <- project542data[train_indices, ]
+test_data <- project542data[-train_indices, ]
+
+train_data$INCWAGE <- NULL
+test_data$INCWAGE <- NULL
+```
+
+```{r}
+fitControl <- trainControl(
+  method = "cv",
+  number = 5,
+  allowParallel = TRUE
+)
+```
+
+
+
+
+##XGBoost
+```{r}
+#Tuning
+# xgboost_grid <- expand.grid(eta=0.1,
+#                             nrounds=500,
+#                             max_depth=c(3,6,9),
+#                             min_child_weight=1,
+#                             gamma=c(.1,.5,1,5,10),
+#                             colsample_bytree=c(0.6,0.8,1),
+#                             subsample=c(0.6,0.8,1.0))
+
+#Recommended Tune
+xgboost_grid <- expand.grid(eta = 0.1,
+                            nrounds = 500,
+                            max_depth = 6,
+                            min_child_weight = 1,
+                            gamma = 5,
+                            colsample_bytree = 0.6,
+                            subsample = 0.8)
+
+cluster <- makeCluster(detectCores() - 1) # Line 1 for parallelization
+registerDoParallel(cluster) # Line 2 for parallelization
+
+XGBOOST <- train(
+  IncomeMedian ~ .,
+  data = train_data,
+  method = "xgbTree",
+  trControl = fitControl,
+  tuneGrid = xgboost_grid,
+  preProc = c("center", "scale"),
+  verbose = FALSE
+)
+
+stopCluster(cluster) # Line 3 for parallelization
+registerDoSEQ() # Line 4 for parallelization
+```
+
+```{r}
+XGBOOST$bestTune
+XGBOOST$results
+
+XGBOOST_results_sort <- XGBOOST$results %>% 
+                          arrange(desc(Accuracy))
+
+#head(XGBOOST_results_sort,10)
+
+XGBOOST_accuracies <- XGBOOST$results %>%
+                        group_by_all() %>%
+                          summarize(Lower_Bound = Accuracy - AccuracySD,
+                                    Upper_Bound = Accuracy + AccuracySD,
+                                    SD_Difference = Upper_Bound - Lower_Bound) %>%
+                          arrange(desc(Accuracy))
+
+selected_columns <- c("eta", "max_depth", "gamma", "colsample_bytree", "min_child_weight", "subsample", "nrounds",
+                      "Accuracy", "AccuracySD", "Lower_Bound", "Upper_Bound", "SD_Difference")
+print(XGBOOST_accuracies[, selected_columns])
+```
+
+```{r}
+predictions <- predict(XGBOOST, newdata = test_data, type = "raw")
+postResample(predictions, test_data$IncomeMedian)
+```
+
+
+
+
+##GBM
+```{r}
+#Tuning
+# gbm_grid <- expand.grid(n.trees = c(500, 750, 1000),
+#                         interaction.depth = c(3, 5, 7),
+#                         shrinkage = c(0.01, 0.1),
+#                         n.minobsinnode = c(5, 10, 15))
+
+
+#Recommended Tune
+gbm_grid <- expand.grid(n.trees = 1000,
+                       interaction.depth = 3,
+                       shrinkage = 0.01,
+                       n.minobsinnode = 10)
+
+cluster <- makeCluster(detectCores() - 1) #Line 1 for parallelization
+registerDoParallel(cluster) #Line 2 for parallelization
+set.seed(479); GBM <- train(IncomeMedian~.,
+                            data=train_data, 
+                            method='gbm',
+                            tuneGrid=gbm_grid,
+                            verbose=FALSE,
+                            trControl=fitControl, 
+                            preProc = c("center", "scale"))
+stopCluster(cluster) #Line 3 for parallelization
+registerDoSEQ() #Line 4 for parallelization
+
+#postResample(predict(GBM,newdata=test_data,n.trees=750),test_data$IncomeMedian)
+```
+
+```{r}
+GBM$bestTune
+
+GBM_results_sort <- GBM$results %>% 
+                      arrange(desc(Accuracy))
+
+#head(GBM_results_sort,10)
+
+GBM_accuracies <- GBM$results %>%
+                    group_by_all() %>%
+                      summarize(Lower_Bound = Accuracy - AccuracySD,
+                                Upper_Bound = Accuracy + AccuracySD,
+                                SD_Difference = Upper_Bound - Lower_Bound) %>%
+                      arrange(desc(Accuracy))
+
+#GBM_accuracies
+selected_columns <- c("shrinkage", "interaction.depth", "n.minobsinnode", "n.trees", 
+                      "Accuracy", "AccuracySD", "Lower_Bound", "Upper_Bound", "SD_Difference")
+print(GBM_accuracies[, selected_columns])
+```
+
+```{r}
+predictions <- predict(GBM, newdata = test_data)
+postResample(predictions, test_data$IncomeMedian)
+```
+
+
+
+
+##Random Forest
+```{r}
+#forestGrid <- expand.grid(mtry = c(2, 4, 6, 12))
+
+forest_grid <- expand.grid(mtry = 12)
+
+cluster <- makeCluster(detectCores() - 1) #Line 1 for parallelization
+registerDoParallel(cluster) #Line 2 for parallelization
+
+FOREST <- train(IncomeMedian ~ .,
+                data = train_data,
+                method = 'rf',
+                tuneGrid = forest_grid,
+                trControl = fitControl, 
+                preProc = c("center", "scale")
+                )
+
+stopCluster(cluster) #Line 3 for parallelization
+registerDoSEQ() #Line 4 for parallelization
+```
+
+```{r}
+FOREST$bestTune
+
+FOREST_results_sort <- FOREST$results %>% 
+                        arrange(desc(Accuracy))
+
+#head(FOREST_results_sort,10)
+
+FOREST_accuracies <- FOREST$results %>%
+                      group_by_all() %>%
+                      summarize(Lower_Bound = Accuracy - AccuracySD,
+                                Upper_Bound = Accuracy + AccuracySD,
+                                SD_Difference = Upper_Bound - Lower_Bound) %>%
+                      arrange(desc(Accuracy))
+
+#FOREST_accuracies
+selected_columns <- c("mtry", "Accuracy", "AccuracySD", "Lower_Bound", "Upper_Bound", "SD_Difference")
+print(FOREST_accuracies[, selected_columns])
+```
+
+```{r}
+#plot(FOREST)
+```
+
+```{r}
+predictions <- predict(FOREST, newdata = test_data)
+postResample(predictions, test_data$IncomeMedian)
+```
+
+```{r}
+TRAIN.PREDICTORS <- project542data
+TRAIN.PREDICTORS$IncomeMedian <- NULL
+TRAIN.TARGET <- as.numeric(project542data$IncomeMedian == "Above Median")
+```
+
+```{r}
+forest_exp <- explain(FOREST, data = TRAIN.PREDICTORS, y = TRAIN.TARGET)
+rf_explainer <- forest_exp
+rf_vi <- model_parts(rf_explainer)
+```
+
+```{r}
+plot(rf_vi)
+```
+
+```{r}
+#plot(model_profile(rf_explainer, type = "accumulated"), variables = "EDUCD")
+```
+
+```{r}
+plot(model_profile(rf_explainer, type = "accumulated"), variables = "UHRSWORK")
+```
+
+```{r}
+predictions <- predict(FOREST, newdata = project542data, type = "prob")[, 2]
+
+high_prob_abovemedian <- as.numeric(which(predictions > 0.97))
+low_prob_abovemedian <- as.numeric(which(predictions < 0.01))
+```
+
+```{r}
+high_prob.observation <- project542data[11722, ]
+plot(predict_parts(explainer = rf_explainer, new_observation = high_prob.observation, type = "break_down"))
+```
+
+```{r}
+low_prob.observation <- project542data[11872, ]
+plot(predict_parts(explainer = rf_explainer, new_observation = low_prob.observation, type = "break_down"))
+```
+
+
+
+##SVM
+```{r}
+#svmLinearGrid <- expand.grid(C=2^(2:8)) 
+svmLinearGrid <- expand.grid(C=256) 
+
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+
+set.seed(479); SVM <- train(IncomeMedian ~ .,
+                            data=train_data,
+                            method='svmLinear', 
+                            trControl=fitControl,
+                            tuneGrid = svmLinearGrid,
+                            preProc = c("center", "scale"))
+
+stopCluster(cluster) #Line 3 for parallelization
+registerDoSEQ() #Line 4 for parallelization
+```
+
+```{r}
+SVM_results_sort <- SVM$results %>% 
+                        arrange(desc(Accuracy))
+
+#head(SVM_results_sort,10)
+
+SVM_accuracies <- SVM$results %>%
+                      group_by_all() %>%
+                      summarize(Lower_Bound = Accuracy - AccuracySD,
+                                Upper_Bound = Accuracy + AccuracySD,
+                                SD_Difference = Upper_Bound - Lower_Bound) %>%
+                      arrange(desc(Accuracy))
+
+#SVM_accuracies
+selected_columns <- c("C", "Accuracy", "AccuracySD", "Lower_Bound", "Upper_Bound", "SD_Difference")
+print(SVM_accuracies[, selected_columns])
+```
+
+```{r}
+SVM
+plot(SVM)
+SVM$bestTune
+SVM$results
+SVM$results[rownames(SVM$bestTune),] 
+```
+
+```{r}
+predictions <- predict(SVM, newdata = test_data)
+postResample(predictions, test_data$IncomeMedian)
+```
